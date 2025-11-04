@@ -8,7 +8,7 @@ pub const Isr = fn () callconv(.{ .arm_interrupt = .{} }) void;
 pub const priogrp = 3;
 
 /// Interrupt service request
-pub const Irq = enum(u9) {
+pub const Irq = enum(u8) {
     stack,
     reset,
     nmi,
@@ -107,7 +107,6 @@ pub const Irq = enum(u9) {
     /// Get a pointer to the priority of the instruction
     pub fn prio(this: @This(), comptime bits: u3) ?*volatile Priority(bits) {
         return switch (@intFromEnum(this)) {
-            0...3 => null,
             4...15 => |n| @ptrCast(&regs.cpu.shpr[n - 4]),
             16...239 => |n| @ptrCast(&regs.cpu.nvic.ipr[n - 16]),
             else => null,

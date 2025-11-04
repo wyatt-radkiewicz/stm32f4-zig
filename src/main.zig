@@ -7,7 +7,7 @@ var ticks: u32 = 0;
 var update_pins: bool = false;
 
 /// Query handler for interrupts
-pub fn isr(irq: hal.Irq) ?hal.Isr {
+pub fn isr(comptime irq: hal.Irq) ?hal.Isr {
     return switch (irq) {
         .systick => struct {
             pub fn handler() callconv(.{ .arm_interrupt = .{} }) void {
@@ -35,5 +35,7 @@ pub fn main() void {
     update_pins = true;
 
     // Run main loop
-    while (true) {}
+    while (true) {
+        hal.regs.gpio(.d).odr.pins +%= 1;
+    }
 }

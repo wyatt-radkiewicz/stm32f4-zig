@@ -1,4 +1,6 @@
 //! Startup code
+const std = @import("std");
+
 const hal = @import("hal.zig");
 const main = @import("main.zig");
 
@@ -9,14 +11,27 @@ const _data_len: *const u32 = @extern(*const u32, .{ .name = "_data_len" });
 const _bss_addr: *const u32 = @extern(*const u32, .{ .name = "_bss_addr" });
 const _bss_len: *const u32 = @extern(*const u32, .{ .name = "_bss_len" });
 
+/// Default isr implementation finder
+fn unimplemented(comptime irq: hal.Irq) hal.Isr {
+    return struct {
+        fn handler() callconv(.{ .arm_interrupt = .{} }) void {
+            while (switch (irq) {
+                .nmi, .hard_fault, .mem_manage, .bus_fault, .usage_fault => true,
+                else => false,
+            }) {}
+        }
+    }.handler;
+}
+
 /// Vector table
 pub export const vectors linksection(".text._vectors") = blk: {
-    var pfns = [2]*const hal.Isr{ @ptrFromInt(0x2002_0000), @ptrCast(&_start) } ++
-        [1]*const hal.Isr{&unimplemented(true)} ** 494;
-    for (2..pfns.len) |n| {
-        if (main.isr(@enumFromInt(n))) |isr| {
-            pfns[n] = &isr;
-        }
+    @setEvalBranchQuota(496 * 1000);
+    var pfns = [1]*allowzero const hal.Isr{@ptrFromInt(0x0000_0000)} ** 496;
+    pfns[0] = @ptrFromInt(0x2002_0000);
+    pfns[1] = @ptrCast(&_start);
+    for (2..@min(std.math.maxInt(std.meta.Tag(hal.Irq)) + 1, pfns.len)) |n| {
+        const irq: hal.Irq = @enumFromInt(n);
+        pfns[n] = &(main.isr(irq) orelse unimplemented(irq));
     }
     const final = pfns;
     break :blk final;
@@ -46,13 +61,4 @@ pub export fn _start() callconv(.naked) noreturn {
         :
         : [main] "r" (main_pfn),
         : .{});
-}
-
-/// Unimplemented interrupt handler
-fn unimplemented(loop: bool) hal.Isr {
-    return struct {
-        fn handler() callconv(.{ .arm_interrupt = .{} }) void {
-            while (loop) {}
-        }
-    }.handler;
 }
