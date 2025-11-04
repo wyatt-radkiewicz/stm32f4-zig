@@ -9,11 +9,8 @@ pub fn build(b: *std.Build) void {
         .cpu_arch = .thumb,
         .os_tag = .freestanding,
         .abi = .eabihf,
-        .cpu_model = .{ .explicit = arm.cpu.cortex_m4 },
-        .cpu_features_add = .{ .ints = .{
-            arm.Feature.dsp,
-            arm.Feature.strict_align,
-        } },
+        .cpu_model = .{ .explicit = &arm.cpu.cortex_m4 },
+        .cpu_features_add = arm.featureSet(&.{ arm.Feature.dsp, arm.Feature.strict_align }),
     });
     const optimize = b.standardOptimizeOption(.{});
 
@@ -26,34 +23,36 @@ pub fn build(b: *std.Build) void {
 
     // Create the main application module
     const main_mod = b.createModule(.{
-        .root_source_file = b.path(b.pathJoin("src", "start.zig")),
+        .root_source_file = b.path(b.pathJoin(&.{ "src", "start.zig" })),
         .target = target,
         .optimize = optimize,
     });
 
     // Create the main elf file
     const main_exe = b.addExecutable(.{
-        .name = config.name,
+        .name = @tagName(config.name),
         .root_module = main_mod,
         .version = std.SemanticVersion.parse(config.version) catch @panic("Bad semver format!"),
     });
-    main_exe.setLinkerScript(b.path("linker.ld"));
+    main_exe.setLinkerScript(b.path(b.pathJoin(&.{ "scripts", "linker.ld" })));
     build_step.dependOn(&main_exe.step);
     install_step.dependOn(&b.addInstallArtifact(main_exe, .{}).step);
 
-    // Flash code to the elf file
-    const openocd_run = b.addSystemCommand(&.{
-        "openocd",
-        "-f",
-        "interface/stlink.cfg",
-        "-f",
-        "board/stm32f4discovery.cfg",
-        "-c",
-        "init; reset halt",
-        "-c",
+    // Generate the output binary
+    const main_bin = b.addObjCopy(main_exe.getEmittedBin(), .{
+        .basename = @tagName(config.name),
+        .format = .bin,
     });
-    openocd_run.addPrefixedArtifactArg("flash write_image ", main_exe);
-    openocd_run.addArgs(&.{ "-c", "reset run; shutdown" });
+    install_step.dependOn(&b.addInstallFileWithDir(
+        main_bin.getOutput(),
+        .bin,
+        b.fmt("{s}.bin", .{main_bin.basename}),
+    ).step);
+
+    // Flash binary to the device
+    const openocd_run = b.addSystemCommand(&.{"sh"});
+    openocd_run.addFileArg(b.path(b.pathJoin(&.{ "scripts", "flash.sh" })));
+    openocd_run.addFileArg(main_bin.getOutput());
     flash_step.dependOn(&openocd_run.step);
 
     // Format step
@@ -69,5 +68,6 @@ pub fn build(b: *std.Build) void {
     install_step.dependOn(&fmt.step);
 
     // Cleanup step
-    clean_step.dependOn(&b.addRemoveDirTree(b.pathFromRoot(".zig-cache")).step);
+    clean_step.dependOn(&b.addRemoveDirTree(b.path("zig-out")).step);
+    clean_step.dependOn(&b.addRemoveDirTree(b.path(".zig-cache")).step);
 }
