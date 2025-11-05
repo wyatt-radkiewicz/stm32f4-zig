@@ -35,7 +35,5 @@ pub fn main() void {
     update_pins = true;
 
     // Run main loop
-    while (true) {
-        hal.regs.gpio(.d).odr.pins +%= 1;
-    }
+    while (true) {}
 }

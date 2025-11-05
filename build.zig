@@ -38,21 +38,12 @@ pub fn build(b: *std.Build) void {
     build_step.dependOn(&main_exe.step);
     install_step.dependOn(&b.addInstallArtifact(main_exe, .{}).step);
 
-    // Generate the output binary
-    const main_bin = b.addObjCopy(main_exe.getEmittedBin(), .{
-        .basename = @tagName(config.name),
-        .format = .bin,
-    });
-    install_step.dependOn(&b.addInstallFileWithDir(
-        main_bin.getOutput(),
-        .bin,
-        b.fmt("{s}.bin", .{main_bin.basename}),
-    ).step);
-
-    // Flash binary to the device
-    const openocd_run = b.addSystemCommand(&.{"sh"});
-    openocd_run.addFileArg(b.path(b.pathJoin(&.{ "scripts", "flash.sh" })));
-    openocd_run.addFileArg(main_bin.getOutput());
+    // Flash image to the device
+    const openocd_run = b.addSystemCommand(&.{"openocd"});
+    openocd_run.addArgs(&.{ "-f", "interface/stlink.cfg" });
+    openocd_run.addArgs(&.{ "-f", "board/stm32f4discovery.cfg", "-c" });
+    openocd_run.addPrefixedArtifactArg("set img_name ", main_exe);
+    openocd_run.addArgs(&.{ "-c", "init; program \"$img_name\" verify reset exit" });
     flash_step.dependOn(&openocd_run.step);
 
     // Format step

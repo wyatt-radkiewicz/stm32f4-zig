@@ -5,8 +5,8 @@ MEMORY {
 }
 
 SECTIONS {
-    .vectors : {
-        *(.text._vectors)
+    .isr_vector : {
+        *(*isr_vector*)
     } >flash
 
     .text : {
