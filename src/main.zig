@@ -10,14 +10,14 @@ var update_pins: bool = false;
 pub fn isr(comptime irq: hal.Irq) ?hal.Isr {
     return switch (irq) {
         .systick => struct {
-            pub fn handler() callconv(.{ .arm_interrupt = .{} }) void {
+            pub fn systick() callconv(.{ .arm_interrupt = .{} }) void {
                 ticks += 1;
-                if (ticks >= 100 and update_pins) {
-                    hal.regs.gpio(.d).odr.pins +%= 1;
+                if (ticks >= 25 and update_pins) {
+                    hal.regs.gpio(.d).odr.pins +%= 2;
                     ticks = 0;
                 }
             }
-        }.handler,
+        }.systick,
         else => null,
     };
 }
@@ -26,12 +26,13 @@ pub fn isr(comptime irq: hal.Irq) ?hal.Isr {
 pub fn main() void {
     // Enable sane defaults
     hal.config.system();
-    hal.config.systick();
+    hal.config.systick(168 * 1000 * 1000);
     hal.config.systemclock(8 * 1000 * 1000);
 
     // Initialize application
     hal.regs.rcc.ahb1enr.gpioden = true;
-    hal.regs.gpio(.a).moder.setMany(0, &([1]hal.regs.Gpio.Moder.Mode{.output} ** 16));
+    _ = hal.regs.rcc.ahb1enr.gpioden;
+    hal.regs.gpio(.d).moder = .splat(.output);
     update_pins = true;
 
     // Run main loop

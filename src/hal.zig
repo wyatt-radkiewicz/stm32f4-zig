@@ -127,26 +127,26 @@ pub const config = struct {
     /// Initialize the system to a sane default
     pub fn system() void {
         // Enable flash caching
-        regs.flash.acr.* = .{
-            .icen = true, // Enable instruction cache
-            .dcen = true, // Enable data cache
-            .prften = true, // Enable prefetching
-        };
+        regs.flash.acr.icen = true; // Enable instruction cache
+        regs.flash.acr.dcen = true; // Enable data cache
+        regs.flash.acr.prften = true; // Enable prefetching
 
         // Initialize interrupts by splitting group and sub priorities to gggg.pppp
         regs.cpu.aircr.prigroup = priogrp;
     }
 
     /// Initialize systick to 1ms
-    pub fn systick() void {
-        regs.cpu.systick.rvr.set(16000); // 16mhz, but we want it to be khz
-        (Irq.systick.prio(priogrp) orelse unreachable).* = .{ .group = 0, .subprio = 0 };
+    pub fn systick(comptime system_clock: usize) void {
+        regs.cpu.systick.rvr.set(system_clock / 1000);
         regs.cpu.systick.cvr.current = 0;
-        regs.cpu.systick.csr.* = .{
+        regs.cpu.systick.csr.* = regs.cpu.systick.Csr{
             .enable = true,
             .tickint = true,
             .clksource = .internal,
         };
+
+        const prio = Irq.systick.prio(priogrp) orelse unreachable;
+        prio.* = Irq.Priority(priogrp){ .group = 0, .subprio = 0 };
     }
 
     /// Default systemclock config with hse being the hse frequency
@@ -158,26 +158,32 @@ pub const config = struct {
         // Set voltage scale for components
         regs.pwr.cr.vos = .scale1mode;
 
-        // Setup rcc occilators
-        regs.rcc.cr.hsion = false;
-        regs.rcc.cr.hseon = true;
-        regs.rcc.cr.pllon = true;
-        regs.rcc.pllcfgr.* = .{
+        // Configure pll to run from hse and run at 168mHz
+        regs.rcc.pllcfgr.* = regs.rcc.PllCfgr{
             .pllm = @intCast(@divExact(
                 336 * hse,
-                168 * regs.rcc.PllCfgr.DivisionFactor.@"2".factor(),
+                168 * 1000 * 1000 * regs.rcc.PllCfgr.DivisionFactor.@"2".factor(),
             )),
             .plln = 336,
             .pllp = .@"2",
             .pllsrc = .hse,
             .pllq = 7,
         };
-        regs.rcc.cfgr.* = .{
-            .sw = .hse,
+
+        // Turn on hse, and pll occilators
+        regs.rcc.cr.hsion = false;
+        regs.rcc.cr.hseon = true;
+        regs.rcc.cr.pllon = true;
+
+        // Configure hardware clocks to run at hclk=168mHz, apb1=42mHz, apb2=84mHz
+        regs.rcc.cfgr.* = regs.rcc.Cfgr{
+            .sw = .pll,
             .hpre = .not_divided,
             .ppre1 = .@"4",
             .ppre2 = .@"2",
         };
+
+        // Calibrate new flash latency
         regs.flash.acr.latency = 5;
     }
 };
@@ -226,43 +232,16 @@ pub const regs = struct {
     }
     pub const GpioId = enum { a, b, c, d, e, f, g, h, i };
     pub const Gpio = extern struct {
-        moder: Moder, // 0x00
-        padding0x13_0x04: [10]u8,
+        moder: PackedArray(Moder, 16, .output),
+        padding0x13_0x04: [0x10]u8,
         odr: Odr,
 
-        /// Port mode register
-        pub const Moder = packed struct(u32) {
-            modes: u32,
-
-            /// Port mode
-            pub const Mode = enum(u2) { input, output, alternate, analog };
-
-            /// Get a port mode
-            pub inline fn get(this: @This(), port: u4) Mode {
-                return @enumFromInt(@as(u2, @truncate(this.modes >> @as(u5, port) * 2)));
-            }
-
-            /// Set a port mode
-            pub inline fn set(this: *volatile @This(), port: u4, mode: Mode) void {
-                var reg = this.modes;
-                reg &= ~(@as(u32, 0b11) << @as(u5, port) * 2);
-                reg |= @as(u32, @intFromEnum(mode)) << @as(u5, port) * 2;
-                this.modes = reg;
-            }
-
-            /// Set many
-            pub inline fn setMany(this: *volatile @This(), port: u4, modes: []const Mode) void {
-                const mask: u32 = if (modes.len < 16)
-                    (@as(u32, 1) << modes.len * 2) - 1
-                else
-                    0xffffffff;
-                var reg = this.modes;
-                reg &= ~(mask << @as(u5, port) * 2);
-                for (modes) |mode| {
-                    reg |= @as(u32, @intFromEnum(mode)) << @as(u5, port) * 2;
-                }
-                this.modes = reg;
-            }
+        /// Port mode
+        pub const Moder = enum(u2) {
+            input,
+            output,
+            alternate,
+            analog,
         };
 
         /// Output data register
@@ -316,7 +295,7 @@ pub const regs = struct {
 
                 /// Get the division factor
                 pub fn factor(this: @This()) u32 {
-                    return @as(u32, @intFromEnum(this)) * 2;
+                    return (@as(u32, @intFromEnum(this)) + 1) * 2;
                 }
             };
 
@@ -493,7 +472,7 @@ pub const regs = struct {
                 reserved31_24: u8 = 0,
 
                 /// Set the reload to occur on a set period of cycles
-                pub fn set(this: *volatile @This(), n: u24) void {
+                pub inline fn set(this: *volatile @This(), n: u24) void {
                     this.reload = n - 1;
                 }
             };
@@ -583,3 +562,58 @@ pub const regs = struct {
         };
     };
 };
+
+/// Simple bit packed array construct
+pub fn PackedArray(comptime T: type, comptime len: usize, comptime default: ?T) type {
+    // Get types
+    const elem_size = @bitSizeOf(T);
+    const ElemInt = std.meta.Int(.unsigned, elem_size);
+    const BackingInt = std.meta.Int(.unsigned, elem_size * len);
+
+    // Helper function for getting the elem as an integer
+    const asInt = struct {
+        pub inline fn helper(elem: T) ElemInt {
+            return switch (@typeInfo(T)) {
+                .@"enum" => @intFromEnum(elem),
+                else => @bitCast(elem),
+            };
+        }
+    }.helper;
+
+    // Get the default items array
+    const default_items = if (default) |elem| comptime blk: {
+        var items: BackingInt = 0;
+        for (0..len) |i| {
+            items |= @as(BackingInt, asInt(elem)) << i * elem_size;
+        }
+        break :blk items;
+    } else 0;
+
+    // Return the struct
+    return packed struct(BackingInt) {
+        items: BackingInt = default_items,
+
+        const elem_mask: BackingInt = (1 << elem_size) - 1;
+
+        // Initialize every element to elem
+        pub inline fn splat(elem: T) @This() {
+            var this = @This(){ .items = 0 };
+            inline for (0..len) |i| {
+                this.items |= @as(BackingInt, asInt(elem)) << i * elem_size;
+            }
+            return this;
+        }
+
+        // Get an element
+        pub inline fn at(this: @This(), n: usize) T {
+            return @bitCast(@as(ElemInt, @truncate(this.items >> n * elem_size)));
+        }
+
+        // Set an element
+        pub inline fn set(this: *@This(), n: usize, elem: T) void {
+            const pos = @as(std.math.Log2Int(BackingInt), @intCast(n)) * 2;
+            this.items &= ~(elem_mask << pos);
+            this.items |= @as(BackingInt, asInt(elem)) << pos;
+        }
+    };
+}
