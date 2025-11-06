@@ -5,7 +5,6 @@ const config = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     // Setup common configuration and build options
-    const host = b.standardTargetOptions(.{});
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .thumb,
         .os_tag = .freestanding,
@@ -54,28 +53,18 @@ pub fn build(b: *std.Build) void {
 
     // Run the debugger
     if (gdb_path) |path| {
-        // Create the debugger options
-        const debug_cfg = b.addOptions();
-        debug_cfg.addOption([]const u8, "openocd_path", openocd_path);
-        debug_cfg.addOption([]const u8, "gdb_path", path);
-        debug_cfg.addOptionPath("main_exe", main_exe.getEmittedBin());
-
-        // Create the debugger module
-        const debug_mod = b.createModule(.{
-            .root_source_file = b.path(b.pathJoin(&.{ "scripts", "debug.zig" })),
-            .optimize = .Debug,
-            .target = host,
+        // Run the debug script to make a little script that can be run to debug the elf file
+        const debug_run = b.addSystemCommand(&.{
+            "sh",
+            b.pathJoin(&.{ "scripts", "debug.sh" }),
+            openocd_path,
+            path,
         });
-        debug_mod.addOptions("config", debug_cfg);
+        debug_run.addArtifactArg(main_exe);
+        const script = debug_run.addOutputFileArg("debug");
 
-        // Create the debugger executable
-        const debug_exe = b.addExecutable(.{
-            .name = "debug",
-            .root_module = debug_mod,
-        });
-
-        // Install the debugger in the debug step
-        debug_step.dependOn(&b.addInstallArtifact(debug_exe, .{}).step);
+        // Install the script
+        debug_step.dependOn(&b.addInstallFile(script, "debug").step);
     } else {
         debug_step.dependOn(&b.addFail("Debug step requires -Dgdb option to be set").step);
     }
