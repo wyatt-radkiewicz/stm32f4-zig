@@ -15,6 +15,11 @@ pub fn build(b: *std.Build) void {
     });
     const optimize = b.standardOptimizeOption(.{});
     const gdb_path = b.option([]const u8, "gdb", "Path to gdb for the debug step");
+    const openocd_path = b.option(
+        []const u8,
+        "openocd",
+        "Path to openocd for flashing code",
+    ) orelse "openocd";
 
     // Gather build steps
     const install_step = b.getInstallStep();
@@ -40,7 +45,7 @@ pub fn build(b: *std.Build) void {
     install_step.dependOn(&b.addInstallArtifact(main_exe, .{}).step);
 
     // Flash image to the device
-    const openocd_run = b.addSystemCommand(&.{"openocd"});
+    const openocd_run = b.addSystemCommand(&.{openocd_path});
     openocd_run.addArgs(&.{ "-f", "interface/stlink.cfg" });
     openocd_run.addArgs(&.{ "-f", "board/stm32f4discovery.cfg", "-c" });
     openocd_run.addPrefixedArtifactArg("set img_name ", main_exe);
@@ -64,6 +69,7 @@ pub fn build(b: *std.Build) void {
 
         // Run the debugger
         const debug_run = b.addRunArtifact(debug_exe);
+        debug_run.addArg(openocd_path);
         debug_run.addArg(path);
         debug_run.addArtifactArg(main_exe);
         debug_run.step.dependOn(&openocd_run.step);

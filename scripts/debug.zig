@@ -5,7 +5,7 @@ const std = @import("std");
 fn usage(stdout: *std.io.Writer, program: []const u8) !void {
     try stdout.print(
         \\usage:
-        \\\t{s} <arm eabi compatible gdb> <elf file>
+        \\\t{s} <path to openocd> <arm eabi compatible gdb> <elf file>
     , .{program});
 }
 
@@ -17,6 +17,10 @@ fn debug(
     args: *std.process.ArgIterator,
 ) !void {
     // Main settings and config
+    const openocd_path = args.next() orelse {
+        try usage(stdout, prg_name);
+        return error.InvalidArgs;
+    };
     const gdb_path = args.next() orelse {
         try usage(stdout, prg_name);
         return error.InvalidArgs;
@@ -28,7 +32,7 @@ fn debug(
 
     // Start up openocd server, halting first
     var openocd = std.process.Child.init(&.{
-        "openocd",
+        openocd_path,
         "-f",
         "interface/stlink.cfg",
         "-f",
