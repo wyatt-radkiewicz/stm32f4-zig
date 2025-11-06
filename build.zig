@@ -32,6 +32,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path(b.pathJoin(&.{ "src", "start.zig" })),
         .target = target,
         .optimize = optimize,
+        .unwind_tables = switch (optimize) {
+            .ReleaseSmall, .ReleaseFast => .none,
+            else => null,
+        },
     });
 
     // Create the main elf file
