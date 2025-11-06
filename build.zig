@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
     // Gather build steps
     const install_step = b.getInstallStep();
     const run_step = b.step("run", "Run the code on the stm32f4discovery");
-    const debug_step = b.step("debug", "Debug the code on the stm32f4discovery");
+    const debug_step = b.step("debug", "Build and install the debugger");
     const fmt_step = b.step("fmt", "Check formatting");
     const clean_step = b.step("clean", "Cleanup cached files");
 
@@ -52,28 +52,30 @@ pub fn build(b: *std.Build) void {
     openocd_run.addArgs(&.{ "-c", "init; program \"$img_name\" preverify verify reset exit" });
     run_step.dependOn(&openocd_run.step);
 
-    // Debug step
+    // Run the debugger
     if (gdb_path) |path| {
-        // Debugger module
+        // Create the debugger options
+        const debug_cfg = b.addOptions();
+        debug_cfg.addOption([]const u8, "openocd_path", openocd_path);
+        debug_cfg.addOption([]const u8, "gdb_path", path);
+        debug_cfg.addOptionPath("main_exe", main_exe.getEmittedBin());
+
+        // Create the debugger module
         const debug_mod = b.createModule(.{
             .root_source_file = b.path(b.pathJoin(&.{ "scripts", "debug.zig" })),
-            .optimize = optimize,
+            .optimize = .Debug,
             .target = host,
         });
+        debug_mod.addOptions("config", debug_cfg);
 
-        // Compile the debugger
+        // Create the debugger executable
         const debug_exe = b.addExecutable(.{
-            .name = "debugger",
+            .name = "debug",
             .root_module = debug_mod,
         });
 
-        // Run the debugger
-        const debug_run = b.addRunArtifact(debug_exe);
-        debug_run.addArg(openocd_path);
-        debug_run.addArg(path);
-        debug_run.addArtifactArg(main_exe);
-        debug_run.step.dependOn(&openocd_run.step);
-        debug_step.dependOn(&debug_run.step);
+        // Install the debugger in the debug step
+        debug_step.dependOn(&b.addInstallArtifact(debug_exe, .{}).step);
     } else {
         debug_step.dependOn(&b.addFail("Debug step requires -Dgdb option to be set").step);
     }
