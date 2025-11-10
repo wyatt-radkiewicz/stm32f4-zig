@@ -1,4 +1,4 @@
-//! Potentiometer controlling led via pwm
+//! Base example code
 const std = @import("std");
 
 const hal = @import("hal");
