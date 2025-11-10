@@ -4,7 +4,7 @@ const std = @import("std");
 const hal = @import("hal");
 
 /// Query handler for interrupts
-pub fn isr(comptime irq: hal.Irq) ?hal.Isr {
+pub fn isr(comptime irq: hal.int.Irq) ?hal.int.Isr {
     return switch (irq) {
         else => null,
     };

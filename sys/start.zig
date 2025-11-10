@@ -13,7 +13,7 @@ const _bss_addr = @extern([*]u8, .{ .name = "_bss_addr" });
 const _bss_len = @extern(*allowzero const anyopaque, .{ .name = "_bss_len" });
 
 /// Default isr implementation finder
-fn unimplemented(comptime irq: hal.Irq) hal.Isr {
+fn unimplemented(comptime irq: hal.int.Irq) hal.int.Isr {
     return struct {
         fn handler() callconv(.{ .arm_interrupt = .{} }) void {
             while (switch (irq) {
@@ -27,11 +27,11 @@ fn unimplemented(comptime irq: hal.Irq) hal.Isr {
 /// Vector table
 pub export const isr_vector linksection(".isr_vector") = blk: {
     @setEvalBranchQuota(496 * 1000);
-    var pfns = [1]*allowzero const hal.Isr{@ptrFromInt(0x0000_0000)} ** 496;
+    var pfns = [1]*allowzero const hal.int.Isr{@ptrFromInt(0x0000_0000)} ** 496;
     pfns[0] = @ptrFromInt(_initial_sp);
     pfns[1] = @ptrCast(&_start);
-    for (2..@min(std.math.maxInt(std.meta.Tag(hal.Irq)) + 1, pfns.len)) |n| {
-        const irq: hal.Irq = @enumFromInt(n);
+    for (2..@min(std.math.maxInt(std.meta.Tag(hal.int.Irq)) + 1, pfns.len)) |n| {
+        const irq: hal.int.Irq = @enumFromInt(n);
         const func = app.isr(irq) orelse unimplemented(irq);
         pfns[n] = &func;
     }
