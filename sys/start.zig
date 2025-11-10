@@ -1,8 +1,8 @@
 //! Startup code
 const std = @import("std");
 
-const hal = @import("hal.zig");
-const main = @import("main.zig");
+const app = @import("app");
+const hal = @import("hal");
 
 /// Linker defined symbols and other important constants
 const _initial_sp: u32 = 0x2002_0000;
@@ -32,7 +32,7 @@ pub export const isr_vector linksection(".isr_vector") = blk: {
     pfns[1] = @ptrCast(&_start);
     for (2..@min(std.math.maxInt(std.meta.Tag(hal.Irq)) + 1, pfns.len)) |n| {
         const irq: hal.Irq = @enumFromInt(n);
-        const func = main.isr(irq) orelse unimplemented(irq);
+        const func = app.isr(irq) orelse unimplemented(irq);
         pfns[n] = &func;
     }
     const final = pfns;
@@ -59,7 +59,7 @@ pub export fn _start() callconv(.naked) noreturn {
         \\bl %[main]
         \\bx lr
         :
-        : [main] "X" (&main.main),
+        : [main] "X" (&app.main),
         : .{
           .r0 = true,
           .r1 = true,

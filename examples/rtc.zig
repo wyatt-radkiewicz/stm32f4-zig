@@ -1,7 +1,7 @@
-//! Main application code
+//! Real time clock with alarm example
 const std = @import("std");
 
-const hal = @import("hal.zig");
+const hal = @import("hal");
 
 var ticks: u32 = 0;
 var update_pins: bool = false;
