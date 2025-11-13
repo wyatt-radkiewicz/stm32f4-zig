@@ -32,7 +32,7 @@ pub fn main() void {
     // Initialize application
     hal.regs.rcc.ahb1enr.gpioden = true;
     _ = hal.regs.rcc.ahb1enr.gpioden;
-    hal.regs.gpio.port(.d).moder = .splat(.output);
+    hal.regs.Gpio.d.regs().moder = .splat(.output);
     update_pins = true;
 
     // Run main loop
