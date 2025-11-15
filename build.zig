@@ -1,143 +1,156 @@
 const std = @import("std");
-const arm = std.Target.arm;
 
-const config = @import("build.zig.zon");
-
+// Although this function looks imperative, it does not perform the build
+// directly and instead it mutates the build graph (`b`) that will be then
+// executed by an external runner. The functions in `std.Build` implement a DSL
+// for defining build steps and express dependencies between them, allowing the
+// build runner to parallelize the build automatically (and the cache system to
+// know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
-    // Build target and optimize config
-    const target = b.resolveTargetQuery(.{
-        .cpu_arch = .thumb,
-        .os_tag = .freestanding,
-        .abi = .eabihf,
-        .cpu_model = .{ .explicit = &arm.cpu.cortex_m4 },
-        .cpu_features_add = arm.featureSet(&.{ arm.Feature.dsp, arm.Feature.strict_align }),
-    });
+    // Standard target options allow the person running `zig build` to choose
+    // what target to build for. Here we do not override the defaults, which
+    // means any target is allowed, and the default is native. Other options
+    // for restricting supported target set are available.
+    const target = b.standardTargetOptions(.{});
+    // Standard optimization options allow the person running `zig build` to select
+    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
+    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
-    const unwind_tables = switch (optimize) {
-        .ReleaseSmall, .ReleaseFast => std.builtin.UnwindTables.none,
-        else => null,
-    };
+    // It's also possible to define more custom flags to toggle optional features
+    // of this build script using `b.option()`. All defined flags (including
+    // target and optimize options) will be listed when running `zig build --help`
+    // in this directory.
 
-    // Build options
-    const gdb_path = b.option([]const u8, "gdb", "Path to gdb for the debug step");
-    const openocd_path = b.option(
-        []const u8,
-        "openocd",
-        "Path to openocd for flashing code",
-    ) orelse "openocd";
-    const example = b.option([]const u8, "example", "Which example to build.");
-
-    // Build steps
-    const install_step = b.getInstallStep();
-    const run_step = b.step("run", "Run the code on the stm32f4discovery");
-    const debug_step = b.step("debug", "Build and install the debugger");
-    const fmt_step = b.step("fmt", "Check formatting");
-    const clean_step = b.step("clean", "Cleanup cached files");
-
-    // Hardware abstraction module
-    const hal_mod = b.createModule(.{
-        .root_source_file = b.path(b.pathJoin(&.{ "hal", "root.zig" })),
+    // This creates a module, which represents a collection of source files alongside
+    // some compilation options, such as optimization mode and linked system libraries.
+    // Zig modules are the preferred way of making Zig code available to consumers.
+    // addModule defines a module that we intend to make available for importing
+    // to our consumers. We must give it a name because a Zig package can expose
+    // multiple modules and consumers will need to be able to specify which
+    // module they want to access.
+    const mod = b.addModule("stm32f4_zig", .{
+        // The root source file is the "entry point" of this module. Users of
+        // this module will only be able to access public declarations contained
+        // in this file, which means that if you have declarations that you
+        // intend to expose to consumers that were defined in other files part
+        // of this module, you will have to make sure to re-export them from
+        // the root file.
+        .root_source_file = b.path("src/root.zig"),
+        // Later on we'll use this module as the root module of a test executable
+        // which requires us to specify a target.
         .target = target,
-        .optimize = optimize,
-        .unwind_tables = unwind_tables,
     });
 
-    // Build every example
-    const example_dir = std.fs.cwd().openDir("examples", .{ .iterate = true }) catch
-        @panic("Expected example directory!");
-    var example_iter = example_dir.iterate();
-    while (example_iter.next() catch @panic("Problem iterating examples directory!")) |entry| {
-        if (entry.kind != .file and !std.mem.eql(u8, ".zig", std.fs.path.extension(entry.name))) {
-            continue;
-        }
-
-        // Example module
-        const example_mod = b.createModule(.{
-            .root_source_file = b.path(b.pathJoin(&.{ "examples", entry.name })),
+    // Here we define an executable. An executable needs to have a root module
+    // which needs to expose a `main` function. While we could add a main function
+    // to the module defined above, it's sometimes preferable to split business
+    // logic and the CLI into two separate modules.
+    //
+    // If your goal is to create a Zig library for others to use, consider if
+    // it might benefit from also exposing a CLI tool. A parser library for a
+    // data serialization format could also bundle a CLI syntax checker, for example.
+    //
+    // If instead your goal is to create an executable, consider if users might
+    // be interested in also being able to embed the core functionality of your
+    // program in their own executable in order to avoid the overhead involved in
+    // subprocessing your CLI tool.
+    //
+    // If neither case applies to you, feel free to delete the declaration you
+    // don't need and to put everything under a single module.
+    const exe = b.addExecutable(.{
+        .name = "stm32f4_zig",
+        .root_module = b.createModule(.{
+            // b.createModule defines a new module just like b.addModule but,
+            // unlike b.addModule, it does not expose the module to consumers of
+            // this package, which is why in this case we don't have to give it a name.
+            .root_source_file = b.path("src/main.zig"),
+            // Target and optimization levels must be explicitly wired in when
+            // defining an executable or library (in the root module), and you
+            // can also hardcode a specific target for an executable or library
+            // definition if desireable (e.g. firmware for embedded devices).
             .target = target,
             .optimize = optimize,
-            .unwind_tables = unwind_tables,
-        });
-        example_mod.addImport("hal", hal_mod);
-
-        // Bootstrap code
-        const bootstrap_mod = b.createModule(.{
-            .root_source_file = b.path(b.pathJoin(&.{ "sys", "start.zig" })),
-            .target = target,
-            .optimize = optimize,
-            .unwind_tables = unwind_tables,
-        });
-        bootstrap_mod.addImport("hal", hal_mod);
-        bootstrap_mod.addImport("app", example_mod);
-
-        // Elf executable
-        const example_exe = b.addExecutable(.{
-            .name = b.fmt("{s}-{s}", .{ @tagName(config.name), std.fs.path.stem(entry.name) }),
-            .root_module = bootstrap_mod,
-            .version = std.SemanticVersion.parse(config.version) catch @panic("Bad semver format!"),
-        });
-        example_exe.setLinkerScript(b.path(b.pathJoin(&.{ "sys", "linker.ld" })));
-
-        // Install
-        install_step.dependOn(&b.addInstallArtifact(example_exe, .{}).step);
-
-        // If this isn't passed on the command line don't run it or debug it
-        if (example) |name| {
-            if (!std.mem.eql(u8, name, std.fs.path.stem(entry.name))) {
-                continue;
-            }
-        } else {
-            continue;
-        }
-
-        // Flash image to the device
-        const openocd_run = b.addSystemCommand(&.{openocd_path});
-        openocd_run.addArgs(&.{ "-f", "interface/stlink.cfg" });
-        openocd_run.addArgs(&.{ "-f", "board/stm32f4discovery.cfg", "-c" });
-        openocd_run.addPrefixedArtifactArg("set img_name ", example_exe);
-        openocd_run.addArgs(&.{ "-c", "init; program \"$img_name\" preverify verify reset exit" });
-        run_step.dependOn(&openocd_run.step);
-
-        // Run the debugger
-        if (gdb_path) |path| {
-            // Run the debug script to make a little script that can be run to debug the elf file
-            const debug_run = b.addSystemCommand(&.{
-                "sh",
-                b.pathJoin(&.{ "sys", "debug.sh" }),
-                openocd_path,
-                path,
-            });
-            debug_run.addArtifactArg(example_exe);
-            const script = debug_run.addOutputFileArg("debug");
-
-            // Install the script
-            debug_step.dependOn(&b.addInstallFile(script, "debug").step);
-        } else {
-            debug_step.dependOn(&b.addFail("Debug step requires -Dgdb option to be set").step);
-        }
-    }
-
-    // Fail on run or debug if an example to build isn't passed in
-    if (example == null) {
-        run_step.dependOn(&b.addFail("Pass example to run with -Dexample=<example name>").step);
-        debug_step.dependOn(&b.addFail("Pass example to debug with -Dexample=<example name>").step);
-    }
-
-    // Format step
-    const fmt = b.addFmt(.{
-        .paths = &.{
-            "examples/",
-            "hal/",
-            "sys/",
-            "build.zig",
-            "build.zig.zon",
-        },
-        .check = true,
+            // List of modules available for import in source files part of the
+            // root module.
+            .imports = &.{
+                // Here "stm32f4_zig" is the name you will use in your source code to
+                // import this module (e.g. `@import("stm32f4_zig")`). The name is
+                // repeated because you are allowed to rename your imports, which
+                // can be extremely useful in case of collisions (which can happen
+                // importing modules from different packages).
+                .{ .name = "stm32f4_zig", .module = mod },
+            },
+        }),
     });
-    fmt_step.dependOn(&fmt.step);
-    install_step.dependOn(&fmt.step);
 
-    // Cleanup step
-    clean_step.dependOn(&b.addRemoveDirTree(b.path("zig-out")).step);
-    clean_step.dependOn(&b.addRemoveDirTree(b.path(".zig-cache")).step);
+    // This declares intent for the executable to be installed into the
+    // install prefix when running `zig build` (i.e. when executing the default
+    // step). By default the install prefix is `zig-out/` but can be overridden
+    // by passing `--prefix` or `-p`.
+    b.installArtifact(exe);
+
+    // This creates a top level step. Top level steps have a name and can be
+    // invoked by name when running `zig build` (e.g. `zig build run`).
+    // This will evaluate the `run` step rather than the default step.
+    // For a top level step to actually do something, it must depend on other
+    // steps (e.g. a Run step, as we will see in a moment).
+    const run_step = b.step("run", "Run the app");
+
+    // This creates a RunArtifact step in the build graph. A RunArtifact step
+    // invokes an executable compiled by Zig. Steps will only be executed by the
+    // runner if invoked directly by the user (in the case of top level steps)
+    // or if another step depends on it, so it's up to you to define when and
+    // how this Run step will be executed. In our case we want to run it when
+    // the user runs `zig build run`, so we create a dependency link.
+    const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
+
+    // By making the run step depend on the default step, it will be run from the
+    // installation directory rather than directly from within the cache directory.
+    run_cmd.step.dependOn(b.getInstallStep());
+
+    // This allows the user to pass arguments to the application in the build
+    // command itself, like this: `zig build run -- arg1 arg2 etc`
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    // Creates an executable that will run `test` blocks from the provided module.
+    // Here `mod` needs to define a target, which is why earlier we made sure to
+    // set the releative field.
+    const mod_tests = b.addTest(.{
+        .root_module = mod,
+    });
+
+    // A run step that will run the test executable.
+    const run_mod_tests = b.addRunArtifact(mod_tests);
+
+    // Creates an executable that will run `test` blocks from the executable's
+    // root module. Note that test executables only test one module at a time,
+    // hence why we have to create two separate ones.
+    const exe_tests = b.addTest(.{
+        .root_module = exe.root_module,
+    });
+
+    // A run step that will run the second test executable.
+    const run_exe_tests = b.addRunArtifact(exe_tests);
+
+    // A top level step for running all tests. dependOn can be called multiple
+    // times and since the two run steps do not depend on one another, this will
+    // make the two of them run in parallel.
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&run_exe_tests.step);
+
+    // Just like flags, top level steps are also listed in the `--help` menu.
+    //
+    // The Zig build system is entirely implemented in userland, which means
+    // that it cannot hook into private compiler APIs. All compilation work
+    // orchestrated by the build system will result in other Zig compiler
+    // subcommands being invoked with the right flags defined. You can observe
+    // these invocations when one fails (or you pass a flag to increase
+    // verbosity) to validate assumptions and diagnose problems.
+    //
+    // Lastly, the Zig build system is relatively simple and self-contained,
+    // and reading its source code will allow you to master it.
 }
