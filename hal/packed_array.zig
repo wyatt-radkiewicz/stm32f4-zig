@@ -48,7 +48,7 @@ pub fn PackedArray(comptime T: type, comptime len: usize, comptime default: ?T) 
         }
 
         // Set an element
-        pub inline fn set(this: *@This(), n: usize, elem: T) void {
+        pub inline fn set(this: *volatile @This(), n: usize, elem: T) void {
             const pos = @as(std.math.Log2Int(BackingInt), @intCast(n)) * 2;
             this.items &= ~(elem_mask << pos);
             this.items |= @as(BackingInt, asInt(elem)) << pos;

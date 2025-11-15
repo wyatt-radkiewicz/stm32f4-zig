@@ -13,7 +13,7 @@ pub fn isr(comptime irq: hal.int.Irq) ?hal.int.Isr {
             pub fn systick() callconv(.{ .arm_interrupt = .{} }) void {
                 ticks += 1;
                 if (ticks >= 25 and update_pins) {
-                    hal.regs.gpio.port(.d).odr.pins +%= 2;
+                    hal.regs.Gpio.d.regs().odr.pins +%= 2;
                     ticks = 0;
                 }
             }
